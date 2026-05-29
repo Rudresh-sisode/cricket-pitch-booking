@@ -33,5 +33,6 @@ main()
   .catch(async (error) => {
     console.error("Seed failed", error);
     await prisma.$disconnect();
+    //@ts-ignore
     process.exit(1);
   });
