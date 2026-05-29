@@ -1,0 +1,47 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum BookingStatus {
+  confirmed
+  cancelled
+}
+
+model User {
+  id        Int       @id @default(autoincrement())
+  name      String
+  email     String    @unique
+  password  String
+  createdAt DateTime  @default(now())
+  bookings  Booking[]
+}
+
+model Pitch {
+  id           Int       @id @default(autoincrement())
+  name         String    @unique
+  location     String
+  pricePerHour Decimal   @db.Decimal(10, 2)
+  bookings     Booking[]
+}
+
+model Booking {
+  id          Int           @id @default(autoincrement())
+  userId      Int
+  pitchId     Int
+  bookingDate DateTime      @db.Date
+  startTime   String        @db.VarChar(5)
+  endTime     String        @db.VarChar(5)
+  status      BookingStatus @default(confirmed)
+  createdAt   DateTime      @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pitch Pitch @relation(fields: [pitchId], references: [id], onDelete: Cascade)
+
+  @@index([pitchId, bookingDate])
+  @@index([userId, createdAt])
+}
