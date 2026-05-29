@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { API_URL, apiRequest } from "../api/client";
 import { useAuth } from "../context/AuthContext";
@@ -66,7 +66,9 @@ export function BookingBoard() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [live, setLive] = useState(false);
+  const [socketReady, setSocketReady] = useState(false);
   const [tick, setTick] = useState(0);
+  const socketRef = useRef<Socket | null>(null);
 
   useEffect(() => {
     const timer = window.setInterval(() => setTick((value) => value + 1), 1000);
@@ -132,13 +134,23 @@ export function BookingBoard() {
     loadBookings().catch((error: Error) => setErrorMessage(error.message));
   }, [token]);
 
+  // Persistent session socket: created once we have a token, torn down only on
+  // logout/unmount. A real tab close fires the server-side disconnect handler,
+  // which releases any holds this connection still owns.
   useEffect(() => {
-    if (!selectedPitchId) return;
+    if (!token) return;
 
-    const socket: Socket = io(API_URL, { transports: ["websocket"] });
-    socket.on("connect", () => setLive(true));
-    socket.on("disconnect", () => setLive(false));
-    socket.emit("join-room", { pitchId: selectedPitchId, date });
+    const socket: Socket = io(API_URL, { transports: ["websocket"], auth: { token } });
+    socketRef.current = socket;
+
+    socket.on("connect", () => {
+      setLive(true);
+      setSocketReady(true);
+    });
+    socket.on("disconnect", () => {
+      setLive(false);
+      setSocketReady(false);
+    });
 
     socket.on("slot:reserved", ({ startTime, userId }: { startTime: string; userId: number }) => {
       setSlots((existing) =>
@@ -182,10 +194,22 @@ export function BookingBoard() {
     });
 
     return () => {
-      socket.emit("leave-room", { pitchId: selectedPitchId, date });
       socket.disconnect();
+      socketRef.current = null;
     };
-  }, [selectedPitchId, date]);
+  }, [token]);
+
+  // Join/leave the room for the currently viewed pitch+date. Re-runs when the
+  // socket (re)connects so a fresh connection rejoins the active room.
+  useEffect(() => {
+    const socket = socketRef.current;
+    if (!socket || !socketReady || !selectedPitchId) return;
+
+    socket.emit("join-room", { pitchId: selectedPitchId, date });
+    return () => {
+      socket.emit("leave-room", { pitchId: selectedPitchId, date });
+    };
+  }, [selectedPitchId, date, socketReady]);
 
   const reserve = async (startTime: string) => {
     if (!token || !selectedPitchId) return;
@@ -223,6 +247,10 @@ export function BookingBoard() {
         ...existing,
         [startTime]: Date.now() + response.expiresInSeconds * 1000
       }));
+
+      // Let the server tie this hold to our connection so it is released early
+      // if we disconnect before confirming.
+      socketRef.current?.emit("hold:start", { pitchId: selectedPitchId, date, startTime });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Reservation failed";
       setErrorMessage(message);
@@ -256,6 +284,9 @@ export function BookingBoard() {
         delete copy[startTime];
         return copy;
       });
+
+      // Hold is now a confirmed booking; stop tracking it for disconnect release.
+      socketRef.current?.emit("hold:end", { pitchId: selectedPitchId, date, startTime });
 
       await Promise.all([loadSlots(), loadBookings()]);
     } catch (error) {

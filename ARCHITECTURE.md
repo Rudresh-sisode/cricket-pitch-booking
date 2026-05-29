@@ -15,6 +15,7 @@ Result: concurrent booking attempts cannot produce two confirmed rows for the sa
 - Only one user can hold a slot at a time.
 - If not confirmed, TTL expiry auto-releases slot.
 - Redis keyspace expiry events publish `slot:released` over Socket.io.
+- **Disconnect during reservation**: the Socket.io connection is authenticated and tracks the holds it owns. On disconnect (e.g. tab close), the server atomically releases each hold it still owns (owner-checked Lua `GET`/`DEL`) and emits `slot:released`, freeing the slot before the 120s TTL. The TTL remains the backstop.
 
 ## 3. Scalability for 10,000 concurrent availability checks
 - Stateless API instances behind load balancer.

@@ -133,6 +133,30 @@ export async function confirmBooking(userId: number, pitchId: number, date: stri
   return created;
 }
 
+// Atomically delete a reservation hold only if it is still owned by `userId`.
+// Returns true if a hold was actually released. Guards against releasing a hold
+// that already expired and was re-acquired by a different user.
+const RELEASE_IF_OWNER_SCRIPT = `
+if redis.call("get", KEYS[1]) == ARGV[1] then
+  return redis.call("del", KEYS[1])
+end
+return 0`;
+
+export async function releaseReservationIfOwner(
+  userId: number,
+  pitchId: number,
+  date: string,
+  startTime: string
+): Promise<boolean> {
+  if (!isValidStartTime(startTime)) {
+    return false;
+  }
+
+  const slotKey = reservationKey(pitchId, date, startTime);
+  const released = await redis.eval(RELEASE_IF_OWNER_SCRIPT, 1, slotKey, String(userId));
+  return Number(released) === 1;
+}
+
 export async function getMyBookings(userId: number) {
   return prisma.booking.findMany({
     where: { userId },
